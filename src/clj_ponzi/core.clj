@@ -70,3 +70,60 @@
   (try
     (apply (partial resolve-dbid db) attr-pairs)
     (catch Exception e nil)))
+
+;;;;;;;;;;;;;;
+;; auto-inc ;;
+;;;;;;;;;;;;;;
+
+(defn- auto-inc-ident [attr]
+  (keyword
+   (if (namespace attr)
+     (str (namespace attr) "/" (name attr) "-auto-inc")
+     (str (name attr) "-auto-inc"))))
+
+(defn current-id-for-attr
+  ([db attr] (current-id-for-attr ::current-id db attr))
+  ([ident db attr]
+   (get (d/entity db (auto-inc-ident attr)) ident)))
+
+(defn set-current-id-for-attr
+  ([conn attr v] (set-current-id-for-attr ::current-id conn attr v))
+  ([ident conn attr v]
+   (d/transact conn [{:db/id [:db/ident (auto-inc-ident attr)]
+                      ident v}])))
+
+(defn auto-inc-attr
+  ([] (auto-inc-attr ::current-id))
+  ([current-id-ident] (auto-inc-attr current-id-ident "Used for auto-incrementing ids via the db.fn/auto-inc function"))
+  ([current-id-ident doc]
+   {:db/id (d/tempid :db.part/db)
+    :db/ident current-id-ident
+    :db/valueType :db.type/long
+    :db/cardinality :db.cardinality/one
+    :db/noHistory true
+    :db/doc doc
+    :db.install/_attribute :db.part/db}))
+
+(defn auto-inc-fn
+  ([] (auto-inc-fn ::current-id))
+  ([auto-inc-attr-ident] (auto-inc-fn auto-inc-attr-ident 0))
+  ([auto-inc-attr-ident starting-value]
+   {:db/id (d/tempid :db.part/db)
+    :db/ident :db.fn/auto-inc
+    :db/fn (d/function {:lang "clojure"
+                        :params ['db 'eid 'attr]
+                        :code (str "(let [auto-inc-ident (keyword (if (namespace attr)
+                                   (str (namespace attr) \"/\" (name attr) \"-auto-inc\")
+                                   (str (name attr) \"-auto-inc\")))
+                                   [auto-inc-tx next-id] (if-let [existing-auto-inc (datomic.api/entity db auto-inc-ident)]
+                                   (let [v (inc (get existing-auto-inc " auto-inc-attr-ident "))]
+                                   [[:db/add auto-inc-ident " auto-inc-attr-ident " v] v])
+                                   (let [a :a]
+                                   [{:db/id (datomic.api/tempid :db.part/db)
+                                   :db/ident auto-inc-ident
+                                   " auto-inc-attr-ident " " starting-value "} " starting-value "]))
+                                   tx [auto-inc-tx
+                                   [:db/add eid attr next-id]]]
+                                   tx)")
+                        })}))
+
